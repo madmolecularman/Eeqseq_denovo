@@ -1,6 +1,1 @@
-echo "# Eeqseq_denovo" >> README.md
-git init
-git add README.md
-git commit -m "first commit"
-git remote add origin https://github.com/madmolecularman/Eeqseq_denovo.git
-git push -u origin master
+This protocol was developed by Jacob Green at the University of Rhode Island. Any questions should be directed to the Github forum for this EecSeq 2.0 Denovo or to gree9242@uri.edu
