@@ -1,0 +1,333 @@
+---
+title: "EecSeq de novo assembly 1.1.7"
+author: "Jacob M. Green"
+date: "3/27/2020"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+
+This protocol was developed by Jacob Green at the University of Rhode Island. Any questions should be directed to the Github forum for this EecSeq 2.0 Denovo or to gree9242@uri.edu
+
+The following commands are used to assemble 150 bp exome or rnaseq reads into denovo contigs and filtered contigs.
+
+The script will contain instructions written in BASH on how to perform quality control of exome reads, assembly of  exome reads, filtering of contigs, analysis of assemblies, and mapping reads to the assemblies.
+
+Commands are presented in a way to be copied and used in your own server. 
+
+Familiarity with coding in BASH, python, and how to work within an commandline environment will be necessary to work through this process. Two excellent references are Practical Computing for Biologists by Haddock and Dunn and Bioinformatic Data Skills by Vince Buffalo
+
+**Let's get started**
+
+## Using Bioconda (our de novo assembly toolset)
+
+Bioconda is a channel for the conda package manager specializing in bioinformatics software. The conda package manager makes installing software a more streamlined process. 
+
+Make sure that the bionconda has configured properly and can be accessed by viewing the configuration loadout. There should not be any readout errors. The next bit of code will also validate whether bioconda has been installed properly.
+
+You can do this by running the subsequent config commands
+
+```{r eval=FALSE, include=TRUE}
+conda config --add channels defaults
+conda config --add channels conda-forge
+conda config --add channels bioconda
+```
+
+Next you will need to create the environments. For our study we made the "assembly_tools" and "assesment_tools"  that will upload all the necessary packages. 
+
+```{r eval=FALSE, include=TRUE}
+conda create -n assembly_tools oases transabyss trinity trimmomatic bwa cd-hit
+```
+
+```{r eval=FALSE, include=TRUE}
+conda create -n assessment_tools diamond busco fastqc multiqc transrate-tools
+```
+
+If you need different packages or wish to install other assemblers go to [Bioconda](https://anaconda.org/bioconda/) and search for the package you are looking to use
+
+To add new packages to the exisiting conda env
+
+```{r eval=FALSE, include=TRUE}
+conda install --name <environment name> <insert package here>
+```
+
+Checking the status of the conda environment
+
+```{r eval=FALSE, include=TRUE}
+conda info --envs
+```
+
+To utilize the environment you must activate the environment. The pipeline will indicate when to utilize this command.
+
+```{r eval=FALSE, include=TRUE}
+source activate <name of environment>
+```
+
+You should deactivate the environment after you are finished
+ 
+```{r eval=FALSE, include=TRUE}
+source deactivate <name of environment>
+```
+
+## Concantenate, QC, Normalize, and Trim reads
+
+Out of these four processes trimming and quality control (QC) is always needed. Concatenation and normalizing may not be needed depending on how you are approaching your project. Spend some time thinking about how your data needs to be trimmed (largely dependent upon the type of sequencing process), if your files need to be concatenated, and if you need to normalize what coverage are you going to use.
+
+### Concatenate
+
+zcat comman is used to uncompress and concatenate R1 and R2 files together, while gzip recompresses the files. This is done to conserve space on your server.
+
+```{r eval = FALSE, include = TRUE}
+zcat *R1* >> ../norm/R1.fastq | gzip R1.fastq > R1.fastq.gz
+zcat *R2* >> ../norm/R2.fastq | gzip R2.fastq > R2.fastq.gz
+```
+
+### Quality Control
+
+**Using FastQC**
+
+You will utilize this program multiple times to make sure our reads are of good quality as we process them. FastQC is able to analyze our reads and sequences for common errors. For help analyzing data from this program please refer to [FastQC](https://www.bioinformatics.babraham.ac.uk/projects/fastqc). Continue to refer to this section when needed.
+
+Run quality control
+
+```{r eval = FALSE, include = TRUE}
+cd ~/eecseq_denovo/norm
+~/miniconda3/pkgs/fastqc-0.11.7-pl5.22.0_0/opt/fastqc-0.11.7/fastqc R1.fastq >> ../qc/R1_fastqc
+~/miniconda3/pkgs/fastqc-0.11.7-pl5.22.0_0/opt/fastqc-0.11.7/fastqc R1.fastq >> ../qc/R1_fastqc
+```
+
+An error will be generate in the files here if reads do not pass certain FastQC steps. Use the Rstudio file system to open the html files and view the through your browser.
+
+We also recommend using the Multiqc to view all of the output from the fastqc filesin one cohesive document. 
+
+### Normalization
+
+We use the insilico read package within the trinity program to normalize our reads. Read normalization to a coverage of 30x and 100x coverage gives us a range in low represented reads (30x) and highly represented reads (100X). Noirmalization is important in that it reduces the amount of data assembly programs must process. This not only reduces the comptational time and resources needed for assembly, but also can increase the quality of data. Normalization can also remove very low represented contigs that you may wish to keep. 
+
+Coverage 100 normalization reads for the trimmed and paired files.
+
+```{r eval = FALSE, include = TRUE}
+~/miniconda3/pkgs/trinity-2.6.6-0/opt/trinity-2.6.6/util/insilico_read_normalization.pl --seqType fq --JM 50G --CPU 10 --max_cov 100 --pairs_together --SS_lib_type RF --left R1_trimltpe.fastq.gz --right R2_trimltpe.fastq.gz --output norm_cov100_output --PARALLEL_STATS
+```
+
+Coverage 30 normalization reads for the trimmed and paired 
+
+```{r eval = FALSE, include = TRUE}
+~/miniconda3/pkgs/trinity-2.6.6-0/opt/trinity-2.6.6/util/insilico_read_normalization.pl --seqType fq --JM 50G --CPU 10 --max_cov 30 --pairs_together --SS_lib_type RF --left R1_trimltpe.fastq.gz --right R2_trimltpe.fastq.gz --output norm_cov30_output --PARALLEL_STATS
+```
+
+### Trim
+
+**Using Trimmomatic** (optional and will differ between project depending on what you are sequencing)
+
+Following initial QC, FastQC may identify primers or other constructs within your read dataset. Here are some guidelines on how to use trimmomatic to help remove those artifacts. Be careful with this tool as removing certain sequence artifacts can alter you base sequences. Also, incomplete trimming can severely impact assembly of de novo reads. A sequenced text file is referenced when using this program to identify the artifacts it is trimming. Please refer to [Trimmomatic](http://www.usadellab.org/cms?page=trimmomatic) for text file structure and any other questions.
+
+This is the usage statement for the trimmomatic program.
+```{r eval = FALSE, include = TRUE}
+java -jar <direct path to trimmomatic> PE -phred33 <input.fq.gz><output.trim.fq.gz> ILLUMINACLIP:</opt/Trimmomatic-0.36/adapter/>TruSeqLt.fa:2:30:10 LEADING:3 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:36
+```
+
+Here I have provided an example fo what a run would look like
+```{r eval = FALSE, include = TRUE}
+java -jar /opt/Trimmomatic-0.36/trimmomatic-0.36.jar PE -phred33 R1.fastq.gz R2.fastq.gz R1_trimltpe.fastq.gz *R1_trimltupe.fastq.gz* R2_trimltpe.fastq.gz *R2_trimltupe.fastq.gz* ILLUMINACLIP:TruSeqLt.fa:2:30:10 LEADING:3 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:36
+```
+
+## Assembly Party
+
+Assembly is a time and resource intensive process. There is a need to monitor these processes as they can be prone to failure due to system memory or thread constraints. Utilizing tmux or screen as a tool to run these programs in the background is necessary to effectively assemble reads. Please use "man screen" or "man tmux" if you are unfamiliar with how to run processes in the background. You may also be operating on a HPC. if you are please consult your system administrator on how to submit jobs and manage the time it takes to complete exome assemblies. 
+
+### Oases (velveth -> velvetg -> oases)
+
+For more information on the development go to the [Github Oases](https://github.com/dzerbino/oases) page.
+
+For oases we use a kmer size of 49. There is a diminishing return as we increase kmer size if our read length is only 150 bp. Oases also works a bit different than the other two programs. We must pipe the output from velveth into velvetg, and velvetg into the oases program. You may need to detach from your tmux window after you begin each program. 
+
+
+velveth on norm_reads
+
+```{r eval = FALSE, include = TRUE}
+~/miniconda3/pkgs/velvet-1.2.10-h470a237_2/bin/velveth oases 49 -fastq -shortPaired -separate left.norm.fq right.norm.fq > eecseq_velh_output.txt
+```
+
+velvetg on the velveth output
+
+```{r eval = FALSE, include = TRUE}
+~/miniconda3/pkgs/velvet-1.2.10-h470a237_2/bin/velvetg oases -ins_length 150 -read_trkg yes > eecseq_velg_output.txt
+```
+
+oases on the velvetg output
+
+```{r eval = FALSE, include = TRUE}
+~/miniconda3/pkgs/oases-0.2.09-0/bin/oases oases -ins_length 150 -cov_cutoff 5 -min_trans_lgth 150 > oases_output.txt
+```
+
+### TransABySS
+
+For more information on TransABySS go to the [Github TransABySS](https://github.com/bcgsc/transabyss) page.
+
+TransABySS prefers even number kmer sizes. Once again there is a diminishing return here for increasing kmer size
+
+
+Python code used to start the transabyss assembly program.
+```{r eval = FALSE, include = TRUE}
+python ~/miniconda3/pkgs/transabyss-1.5.5-py27_3/bin/transabyss --kmer 44 --outdir ~/eecseq_denovo/assembly/transabyss/ --length 150 --threads 4 --pe left.norm.fq right.norm.fq > ~/eecseq_denovo/assembly/transabyss/eecseq_cov100_transabyss_20.txt
+```
+
+After completing the assembly step you now have two assemblies. Oases = transcripts.fa and transabyss = transcripts-final.fa
+
+## CD-hit filtering
+
+CD-hit is used to reduces sequence redundancy and improve the quality of our assembly. The program will filter through the given assembly and remove them. For some project you may wish to keep all of the assembled contigs, but if you have a lot of overrepresetnation or redundancy your assembly quality metrics such as N50, BUSCO, and other may improve through leveraging CD-hit.
+
+For more information about CD-hit go to (CD-hit Filtering)[http://weizhongli-lab.org/lab-wiki/doku.php?id=cd-hit-user-guide] page. 
+
+### Run a cd_hit session for oases assembly
+
+oases
+```{r eval = FALSE, include = TRUE}
+cd-hit-est -i transcripts.fa -o oases_95.fa -c 0.95 -n 10 -d 0 -M 16000 -T 8
+```
+
+### Run a cd_hit session for transabyss assembly
+
+transabyss
+```{r eval = FALSE, include = TRUE}
+cd-hit-est -i transabyss-final.fa -o transabyss_95.fa -c 0.95 -n 10 -d 0 -M 16000 -T 8
+```
+
+## Assessment
+
+### N50
+
+N50 is the minimum contig length needed to cover 50% of the genome. Although it is not a perfect metric of assembly quality it is one of the fastest we can use and can act as a quick tool to leverage for assesment. Use (N50)[http://www.metagenomics.wiki/pdf/definition/assembly/n50] to find for information on what this metric is. We will be using the N50 tool inside of the trinity package. 
+
+usage:
+~/miniconda3/pkgs/trinity-2.6.6-0/opt/trinity-2.6.6/util/TrinityStats.pl <assembly>
+ 
+oases
+```{r eval = FALSE, include = TRUE}
+~/miniconda3/pkgs/trinity-2.6.6-0/opt/trinity-2.6.6/util/TrinityStats.pl transcripts.fa > oases_n50.txt
+```
+
+transabyss
+```{r eval = FALSE, include = TRUE}
+~/miniconda3/pkgs/trinity-2.6.6-0/opt/trinity-2.6.6/util/TrinityStats.pl transabyss-final.fa > transabyss_n50.txt
+```
+
+To view these results 
+
+```{r eval = FALSE, include = TRUE}
+cat <insert assembly_50.txt file here>
+```
+
+### N50 for cdhit assembly
+
+ oases
+```{r eval = FALSE, include = TRUE}
+~/miniconda3/pkgs/trinity-2.6.6-0/opt/trinity-2.6.6/util/TrinityStats.pl oases_95.fa > oases_95_n50.txt
+```
+
+ transabyss
+```{r eval = FALSE, include = TRUE}
+~/miniconda3/pkgs/trinity-2.6.6-0/opt/trinity-2.6.6/util/TrinityStats.pl transabyss_95.fa > transabyss_95_n50.txt
+```
+
+To view these results 
+
+```{r eval = FALSE, include = TRUE}
+cat <insert assembly_50.txt file here>
+```
+
+### Transrate
+
+(Need transrate explanation and and reference here)
+
+oases
+```{r eval = FALSE, include = TRUE}
+transrate --assembly transcripts.fa --left left.norm.fq --right right.norm.fq --output transrate_oases 
+```
+
+transabyss
+```{r eval = FALSE, include = TRUE}
+transrate --assembly transabyss-final.fa --left left.norm.fq --right right.norm.fq --output transrate_transabyss 
+```
+
+### BUSCO and Diamond
+
+Benchmark Universal Single Copy Orthologs (**BUSCO**) is a strong method for assesing the proper assembly of certain genes. Othologous genes within these databases are derived from a single ancestral gene shared within the lineage and their single copy, duplicated, fragmented, and missing rates can be used to view the quality of your assembly. 
+
+The more specific database you can use the better. Within this frame work we will be using the Eukaryota and Metazoa databases. For any questions regarding BUSCO, its function, and accessing more databases please reference (BUSCO)[https://busco.ezlab.org/]
+
+Diamond is a rapid annotation program that leverages any database you would like to feed it. To make annotation meaningful, using a database that has well described genes is important. We will use the UniProt SwissProt, a database where all the genes annotated will be thororoughly annotated. Follow the links for (Diamond)[https://github.com/bbuchfink/diamond] or (UniProt)[https://www.uniprot.org/] for inqueries. 
+
+These databases will be saved in the databases folder.
+
+Download the Metazoa database from online source
+```{r eval = FALSE, include = TRUE}
+wget https://busco-data.ezlab.org/v4/data/lineages/metazoa_odb10.2019-11-20.tar.gz
+```
+
+Unpack the metazoa database 
+```{r eval = FALSE, include = TRUE}
+tar -zxvf metazoa_odb10.2019-11-20.tar.gz
+```
+
+Download the Eukaryota database from online source
+```{r eval = FALSE, include = TRUE}
+wget https://busco-data.ezlab.org/v4/data/lineages/eukaryota_odb10.2019-11-20.tar.gz
+```
+
+Unpack the eukaryota database 
+```{r eval = FALSE, include = TRUE}
+tar -zxvf eukaryota_odb10.2019-11-20.tar.gz
+```/
+
+For diamond we are going to use the uniprot swiss prot database. 
+```{r eval = FALSE, include = TRUE}
+wget ftp://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.fasta.gz
+```
+
+**Using the Eukaryota database**
+
+oases
+```{r eval = FALSE, include = TRUE}
+python ~/miniconda3/pkgs/busco-1.2py27_1/bin/BUSCO_v1.2.py -i transcripts.fa -o oases_euk_busco -l ~/databases/eukaryota_odb9/ -m transcriptome --cpu 4
+````
+
+transabyss
+```{r eval = FALSE, include = TRUE}
+python ~/miniconda3/pkgs/busco-1.2py27_1/bin/BUSCO_v1.2.py -i transabyss-final.fa -o transabyss_euk_busco -l ~/databases/eukaryota_odb9/ -m transcriptome --cpu 4
+```
+
+**Using the Metazoa database**
+
+oases
+```{r eval = FALSE, include = TRUE}
+python ~/miniconda3/pkgs/busco-1.2py27_1/bin/BUSCO_v1.2.py -i transabyss-final.fa -o meta_oases_busco -l ~/databases/metazoa_odb9/ -m transcriptome --cpu 4
+```
+
+transabyss
+```{r eval = FALSE, include = TRUE}
+python ~/miniconda3/pkgs/busco-1.2py27_1/bin/BUSCO_v1.2.py -i transabyss-final.fa -o eeqseq_trans_busco -l ~/databases/metazoa_odb9/ -m transcriptome --cpu 4
+```
+
+### Diamond Annotation
+
+oases
+```{r eval = FALSE, include = TRUE}
+diamond blastx -p 2 -k 1 -e 0.00001 -d ~/databases/uniprot_sprot.dmnd -q transcripts.fa -o oases.annot.fa
+```
+
+transabyss
+```{r eval = FALSE, include = TRUE}
+diamond blastx -p 2 -k 1 -e 0.00001 -d ~/databases/uniprot_sprot.dmnd -q transabyss-final.fa -o transabyss20.annot.fa
+```
+
+Now you have generated enough inforamtion to assess the assemblies and decide how you would like to proceed. Thank yourself for making it this far! Happy coding :)
